@@ -1,11 +1,10 @@
 import 'package:uuid/uuid.dart';
 
+/// Generates stable random identifiers (UUID v4).
 class IdGenerator {
-  static final Uuid _uuid = Uuid();
+  const IdGenerator();
 
-  static String nextMessageId() => 'msg-${_uuid.v4()}';
+  static const Uuid _uuid = Uuid();
 
-  static String nextSosId() => 'sos-${_uuid.v4()}';
-
-  static String nextEventId() => 'evt-${_uuid.v4()}';
+  String next() => _uuid.v4();
 }

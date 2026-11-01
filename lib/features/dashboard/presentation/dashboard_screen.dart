@@ -1,325 +1,505 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-import '../../../app/app.dart';
-import '../../../core/constants/app_constants.dart';
+import '../../../app/providers.dart';
+import '../../../app/router.dart';
+import '../../../app/shell_scaffold.dart';
+import '../../../app/theme/app_theme.dart';
+import '../../../core/utils/formatters.dart';
+import '../../../shared/widgets/common.dart';
+import '../../../shared/widgets/eco_card.dart';
+import '../../../shared/widgets/status_pill.dart';
+import '../../devices/domain/device_transport.dart';
+import '../../devices/domain/node.dart';
+import '../../devices/presentation/device_widgets.dart';
+import '../../location/domain/location_fix.dart';
+import '../../location/presentation/location_controller.dart';
+import '../../messaging/presentation/message_widgets.dart';
+import '../../sos/presentation/sos_screen.dart';
+import '../../synchronization/domain/sync_item.dart';
 
-class DashboardScreen extends StatelessWidget {
-  const DashboardScreen({super.key, this.onNavigate});
-
-  final void Function(int index)? onNavigate;
+class DashboardScreen extends ConsumerWidget {
+  const DashboardScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final state = context.watch<EcoLinkState>();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final profile = ref.watch(profileProvider).value;
+    final connection =
+        ref.watch(connectionStateProvider).value ??
+        TransportConnectionState.disconnected;
+    final transport = ref.watch(deviceTransportProvider);
+    final nodes = ref.watch(nodesProvider).value ?? const <Node>[];
+    final conversations = ref.watch(conversationsProvider).value ?? const [];
+    final sos = ref.watch(sosEventsProvider).value ?? const [];
+    final local = ref.watch(localNodeIdProvider);
+
+    final active = sos.where((e) => e.isActive).toList();
+    final others = nodes.where((n) => !n.isGateway).toList();
+    final online = others.where((n) => n.status == NodeStatus.online).length;
+    final gateway = nodes.where((n) => n.isGateway).firstOrNull;
+    final simulated = transport.isSimulated;
+
+    final rssiValues = others
+        .where((n) => n.status == NodeStatus.online && n.rssi != null)
+        .map((n) => n.rssi!);
+    final bestRssi = rssiValues.isEmpty
+        ? null
+        : rssiValues.reduce((a, b) => a > b ? a : b);
+    final batteries = others
+        .where((n) => n.status == NodeStatus.online && n.batteryPercent != null)
+        .map((n) => n.batteryPercent!);
+    final lowBattery = batteries.isEmpty
+        ? null
+        : batteries.reduce((a, b) => a < b ? a : b);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text(AppConstants.appName),
+        title: const Text('EcoLink'),
         actions: [
           IconButton(
-            onPressed: () => state.log('Diagnostics refreshed'),
-            icon: const Icon(Icons.refresh),
+            tooltip: 'Profile',
+            icon: const Icon(Icons.account_circle_outlined),
+            onPressed: context.openProfile,
+          ),
+          IconButton(
+            tooltip: 'Settings',
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: context.openSettings,
           ),
         ],
       ),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            _HeroCard(state: state),
-            const SizedBox(height: 16),
-            GridView.count(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisCount: 2,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-              childAspectRatio: 1.5,
-              children: [
-                _MetricCard(
-                  title: 'USB',
-                  value: state.usbStatus,
-                  icon: Icons.usb_rounded,
-                  tint: Colors.blue,
-                ),
-                _MetricCard(
-                  title: 'RF',
-                  value: state.rfStatus,
-                  icon: Icons.signal_cellular_4_bar_rounded,
-                  tint: Colors.green,
-                ),
-                _MetricCard(
-                  title: 'Internet',
-                  value: state.internetAvailable ? 'Online' : 'Offline',
-                  icon: Icons.wifi,
-                  tint: Colors.orange,
-                ),
-                _MetricCard(
-                  title: 'Cloud',
-                  value: state.cloudStatus,
-                  icon: Icons.cloud_done_rounded,
-                  tint: Colors.indigo,
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            _ActionRow(
-              onNavigate: onNavigate,
-              actions: [
-                ('Messages', Icons.message_rounded, 1),
-                ('Devices', Icons.devices_rounded, 3),
-                ('SOS', Icons.warning_amber_rounded, 2),
-                ('Settings', Icons.settings_rounded, 4),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _MetricSummary(
-                    title: 'Sent',
-                    value: '${state.sentMessagesCount}',
-                    accent: Colors.teal,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _MetricSummary(
-                    title: 'Received',
-                    value: '${state.receivedMessagesCount}',
-                    accent: Colors.deepPurple,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            _MetricSummary(
-              title: 'Pending sync',
-              value: '${state.pendingQueueCount}',
-              accent: Colors.amber,
-            ),
-            const SizedBox(height: 12),
-            _MetricSummary(
-              title: 'Last sync',
-              value: state.lastSuccessfulSync == null
-                  ? 'Unknown'
-                  : state.lastSuccessfulSync!.toLocal().toString().substring(
-                      0,
-                      16,
-                    ),
-              accent: Colors.red,
-            ),
-          ],
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(
+          Spacing.lg,
+          Spacing.sm,
+          Spacing.lg,
+          Spacing.xxl,
         ),
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          await state.activateSos();
-        },
-        icon: const Icon(Icons.warning_amber_rounded),
-        label: const Text('Activate SOS'),
+        children: [
+          _Welcome(
+            name: profile?.displayName ?? 'Traveller',
+            nodeId: local,
+            connection: connection,
+            simulated: simulated,
+            onToggle: () => toggleGateway(context, ref),
+          ),
+          if (active.isNotEmpty) ...[
+            const SectionHeader('Active SOS'),
+            for (final e in active)
+              Padding(
+                padding: const EdgeInsets.only(bottom: Spacing.md),
+                child: SosEventCard(event: e, isOwn: e.sourceNodeId == local),
+              ),
+          ],
+          const SectionHeader('Network'),
+          GridView.count(
+            crossAxisCount: 2,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            mainAxisSpacing: Spacing.md,
+            crossAxisSpacing: Spacing.md,
+            childAspectRatio: 1.45,
+            children: [
+              _StatTile(
+                icon: Icons.router,
+                label: 'Gateway',
+                value: switch (connection) {
+                  TransportConnectionState.connected => 'Connected',
+                  TransportConnectionState.connecting => 'Connecting',
+                  TransportConnectionState.error => 'Error',
+                  TransportConnectionState.disconnected => 'Offline',
+                },
+                detail: gateway?.nodeId ?? 'No device',
+                simulated: simulated && gateway != null,
+              ),
+              _StatTile(
+                icon: Icons.cell_tower,
+                label: 'Nodes online',
+                value: '$online / ${others.length}',
+                detail: others.isEmpty
+                    ? 'None discovered'
+                    : 'Discovered nearby',
+                simulated: others.any((n) => n.isSimulated),
+                onTap: () => context.go(AppRoutes.devices),
+              ),
+              _StatTile(
+                icon: Icons.network_cell,
+                label: 'Best signal',
+                value: bestRssi == null ? '—' : '$bestRssi dBm',
+                detail: 'Strongest online node',
+                simulated: bestRssi != null && simulated,
+              ),
+              _StatTile(
+                icon: Icons.battery_alert_outlined,
+                label: 'Lowest battery',
+                value: lowBattery == null ? '—' : '$lowBattery%',
+                detail: 'Across online nodes',
+                simulated: lowBattery != null && simulated,
+              ),
+            ],
+          ),
+          const SectionHeader('Quick actions'),
+          Row(
+            children: [
+              Expanded(
+                child: _QuickAction(
+                  icon: Icons.chat_bubble_outline,
+                  label: 'Message',
+                  onTap: () => context.go(AppRoutes.messages),
+                ),
+              ),
+              const SizedBox(width: Spacing.md),
+              Expanded(
+                child: _QuickAction(
+                  icon: Icons.sos,
+                  label: 'SOS',
+                  emergency: true,
+                  onTap: () => context.go(AppRoutes.sos),
+                ),
+              ),
+              const SizedBox(width: Spacing.md),
+              Expanded(
+                child: _QuickAction(
+                  icon: Icons.my_location,
+                  label: 'Location',
+                  onTap: () => context.go(AppRoutes.map),
+                ),
+              ),
+            ],
+          ),
+          const SectionHeader('Location'),
+          const _LocationSummary(),
+          SectionHeader(
+            'Recent messages',
+            actionLabel: 'See all',
+            onAction: () => context.go(AppRoutes.messages),
+          ),
+          if (conversations.isEmpty)
+            const EcoCard(
+              child: Text(
+                'No messages yet. Conversations you start or receive appear here.',
+              ),
+            )
+          else
+            for (final c in conversations.take(3))
+              Padding(
+                padding: const EdgeInsets.only(bottom: Spacing.sm),
+                child: EcoCard(
+                  onTap: () => context.push(AppRoutes.conversation(c.id)),
+                  child: Row(
+                    children: [
+                      PeerAvatar(c.title, radius: 18),
+                      const SizedBox(width: Spacing.md),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              c.title,
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            Text(
+                              c.lastMessage ?? '',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (c.unreadCount > 0)
+                        Badge(label: Text('${c.unreadCount}')),
+                    ],
+                  ),
+                ),
+              ),
+          const SectionHeader('Cloud synchronization'),
+          const _SyncSummary(),
+        ],
       ),
     );
   }
 }
 
-class _HeroCard extends StatelessWidget {
-  const _HeroCard({required this.state});
+class _Welcome extends StatelessWidget {
+  const _Welcome({
+    required this.name,
+    required this.nodeId,
+    required this.connection,
+    required this.simulated,
+    required this.onToggle,
+  });
 
-  final EcoLinkState state;
+  final String name;
+  final String nodeId;
+  final TransportConnectionState connection;
+  final bool simulated;
+  final VoidCallback onToggle;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final connected = connection == TransportConnectionState.connected;
+    final busy = connection == TransportConnectionState.connecting;
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(Spacing.xl - 4),
       decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(Radii.lg),
         gradient: LinearGradient(
-          colors: [theme.colorScheme.primary, const Color(0xFF2D7A76)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
+          colors: [
+            scheme.primary,
+            Color.lerp(scheme.primary, scheme.secondary, 0.55)!,
+          ],
         ),
-        borderRadius: BorderRadius.circular(24),
       ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Hello, $name',
+            style: theme.textTheme.headlineSmall?.copyWith(
+              color: scheme.onPrimary,
+            ),
+          ),
+          const SizedBox(height: Spacing.xs),
+          Text(
+            'Node $nodeId',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: scheme.onPrimary.withValues(alpha: 0.85),
+            ),
+          ),
+          const SizedBox(height: Spacing.lg),
+          Wrap(
+            spacing: Spacing.sm,
+            runSpacing: Spacing.sm,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              ConnectionPill(state: connection),
+              if (simulated) const SimulatedBadge(),
+            ],
+          ),
+          const SizedBox(height: Spacing.lg),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: scheme.onPrimary,
+              foregroundColor: scheme.primary,
+            ),
+            onPressed: busy ? null : onToggle,
+            icon: Icon(connected ? Icons.link_off : Icons.usb),
+            label: Text(connected ? 'Disconnect gateway' : 'Connect gateway'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatTile extends StatelessWidget {
+  const _StatTile({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.detail,
+    this.simulated = false,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final String detail;
+  final bool simulated;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return EcoCard(
+      onTap: onTap,
+      semanticLabel: '$label: $value',
+      padding: const EdgeInsets.all(Spacing.md + 2),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 20, color: theme.colorScheme.primary),
+              const SizedBox(width: Spacing.sm),
+              Expanded(
+                child: Text(
+                  label,
+                  style: theme.textTheme.labelMedium,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (simulated)
+                Icon(
+                  Icons.science_outlined,
+                  size: 14,
+                  color: context.status.simulated,
+                ),
+            ],
+          ),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(value, style: theme.textTheme.headlineSmall),
+          ),
+          Text(
+            detail,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QuickAction extends StatelessWidget {
+  const _QuickAction({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.emergency = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool emergency;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = emergency ? scheme.error : scheme.primary;
+    return EcoCard(
+      onTap: onTap,
+      color: emergency ? scheme.error.withValues(alpha: 0.08) : null,
+      borderColor: emergency ? scheme.error.withValues(alpha: 0.4) : null,
+      padding: const EdgeInsets.symmetric(vertical: Spacing.lg),
+      child: Column(
+        children: [
+          Icon(icon, color: color, size: 28),
+          const SizedBox(height: Spacing.sm),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelLarge
+                ?.copyWith(color: color),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LocationSummary extends ConsumerWidget {
+  const _LocationSummary();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(locationControllerProvider);
+    final latest = ref.watch(latestLocationProvider).value;
+    final fix = state.fix ?? latest;
+    final theme = Theme.of(context);
+
+    final String title;
+    final String detail;
+    if (state.permission == LocationPermissionState.denied ||
+        state.permission == LocationPermissionState.deniedForever) {
+      title = 'Location permission needed';
+      detail = 'Open the Map tab to grant access.';
+    } else if (state.permission == LocationPermissionState.serviceDisabled) {
+      title = 'GPS is turned off';
+      detail = 'Turn on location services to get a fix.';
+    } else if (fix == null) {
+      title = state.isLoading ? 'Getting GPS fix…' : 'No location yet';
+      detail = state.error ?? 'Open the Map tab to get your position.';
+    } else {
+      title = Formatters.coordinates(fix.latitude, fix.longitude);
+      detail =
+          '${Formatters.accuracy(fix.accuracy)} · ${Formatters.relative(fix.recordedAt)}';
+    }
+
+    return EcoCard(
+      onTap: () => context.go(AppRoutes.map),
+      child: Row(
+        children: [
+          Icon(
+            fix == null ? Icons.location_off_outlined : Icons.place,
+            color: theme.colorScheme.primary,
+          ),
+          const SizedBox(width: Spacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: theme.textTheme.titleSmall),
+                Text(detail, style: theme.textTheme.bodySmall),
+              ],
+            ),
+          ),
+          const Icon(Icons.chevron_right),
+        ],
+      ),
+    );
+  }
+}
+
+class _SyncSummary extends ConsumerWidget {
+  const _SyncSummary();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final summary = ref.watch(syncSummaryProvider).value ?? const SyncSummary();
+    final theme = Theme.of(context);
+    final PillTone tone;
+    final String label;
+    if (summary.failed > 0) {
+      tone = PillTone.danger;
+      label = '${summary.failed} failed';
+    } else if (summary.pending > 0) {
+      tone = PillTone.warning;
+      label = '${summary.pending} waiting for Internet';
+    } else {
+      tone = summary.synced > 0 ? PillTone.success : PillTone.neutral;
+      label = summary.synced > 0 ? 'All uploaded' : 'Nothing to upload';
+    }
+    return EcoCard(
+      onTap: context.openSync,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.eco_rounded, color: Colors.white),
-              const SizedBox(width: 8),
-              Text(
-                AppConstants.appName,
-                style: theme.textTheme.titleLarge?.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
+              const Icon(Icons.cloud_sync_outlined),
+              const SizedBox(width: Spacing.md),
+              Expanded(
+                child: Text(
+                  'Opportunistic sync',
+                  style: theme.textTheme.titleSmall,
                 ),
               ),
+              const SimulatedBadge(label: 'SIMULATED CLOUD'),
             ],
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: Spacing.md),
+          StatusPill(label: label, tone: tone),
+          const SizedBox(height: Spacing.sm),
           Text(
-            'Traveller safety and RF fallback communication',
-            style: theme.textTheme.bodyLarge?.copyWith(color: Colors.white70),
-          ),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _StatusChip(label: 'USB ${state.usbStatus}', color: Colors.white),
-              _StatusChip(label: 'RF ${state.rfStatus}', color: Colors.white),
-              _StatusChip(
-                label: state.internetAvailable
-                    ? 'Internet online'
-                    : 'Internet offline',
-                color: Colors.white,
-              ),
-            ],
+            summary.lastSyncedAt == null
+                ? 'Never synchronized'
+                : 'Last sync ${Formatters.relative(summary.lastSyncedAt!)}',
+            style: theme.textTheme.bodySmall,
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _StatusChip extends StatelessWidget {
-  const _StatusChip({required this.label, required this.color});
-
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: 0.55)),
-      ),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.labelMedium?.copyWith(color: color),
-      ),
-    );
-  }
-}
-
-class _MetricCard extends StatelessWidget {
-  const _MetricCard({
-    required this.title,
-    required this.value,
-    required this.icon,
-    required this.tint,
-  });
-
-  final String title;
-  final String value;
-  final IconData icon;
-  final Color tint;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, color: tint),
-            const SizedBox(height: 12),
-            Text(title, style: Theme.of(context).textTheme.labelMedium),
-            const SizedBox(height: 6),
-            Text(
-              value,
-              style: Theme.of(context).textTheme.titleLarge
-                  ?.copyWith(fontWeight: FontWeight.w700),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ActionRow extends StatelessWidget {
-  const _ActionRow({required this.actions, this.onNavigate});
-
-  final List<(String, IconData, int)> actions;
-  final void Function(int index)? onNavigate;
-
-  @override
-  Widget build(BuildContext context) {
-    return GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisSpacing: 12,
-      mainAxisSpacing: 12,
-      childAspectRatio: 2.4,
-      children: actions
-          .map(
-            (action) => FilledButton.tonal(
-              onPressed: () => onNavigate?.call(action.$3),
-              child: Row(
-                children: [
-                  Icon(action.$2),
-                  const SizedBox(width: 8),
-                  Text(action.$1),
-                ],
-              ),
-            ),
-          )
-          .toList(),
-    );
-  }
-}
-
-class _MetricSummary extends StatelessWidget {
-  const _MetricSummary({
-    required this.title,
-    required this.value,
-    required this.accent,
-  });
-
-  final String title;
-  final String value;
-  final Color accent;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Container(
-              width: 10,
-              height: 10,
-              decoration: BoxDecoration(
-                color: accent,
-                borderRadius: BorderRadius.circular(99),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: theme.textTheme.labelMedium),
-                const SizedBox(height: 4),
-                Text(
-                  value,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
       ),
     );
   }

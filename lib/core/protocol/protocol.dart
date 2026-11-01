@@ -58,21 +58,29 @@ class ProtocolMessage {
   final DateTime createdAt;
   final Map<String, dynamic> payload;
 
+  /// Parses a decoded JSON object. Any structural or type problem is reported
+  /// as a [FormatException] so callers only handle one failure type.
   factory ProtocolMessage.fromJson(Map<String, dynamic> json) {
     _validateJson(json);
-    return ProtocolMessage(
-      messageId: json['message_id'] as String,
-      type: ProtocolMessageTypeX.fromValue(json['type'] as String),
-      sourceId: json['source_id'] as String,
-      destinationId: json['destination_id'] as String,
-      sequenceNumber: json['sequence_number'] as int,
-      hopLimit: json['hop_limit'] as int,
-      createdAt: DateTime.parse(json['created_at'] as String),
-      payload: Map<String, dynamic>.from(json['payload'] as Map),
-      protocolVersion:
-          json['protocol_version'] as int? ?? AppConstants.protocolVersion,
-    );
+    try {
+      return ProtocolMessage(
+        messageId: json['message_id'] as String,
+        type: ProtocolMessageTypeX.fromValue(json['type'] as String),
+        sourceId: json['source_id'] as String,
+        destinationId: json['destination_id'] as String,
+        sequenceNumber: json['sequence_number'] as int,
+        hopLimit: json['hop_limit'] as int,
+        createdAt: DateTime.parse(json['created_at'] as String),
+        payload: Map<String, dynamic>.from(json['payload'] as Map),
+        protocolVersion: json['protocol_version'] as int,
+      );
+    } on TypeError {
+      throw const FormatException('Protocol field has an unexpected type.');
+    }
   }
+
+  /// Size of the serialized message in bytes (UTF-8).
+  int get encodedLength => utf8.encode(toEncodedJson()).length;
 
   Map<String, dynamic> toJson() {
     return {
@@ -91,7 +99,7 @@ class ProtocolMessage {
   String toEncodedJson() => jsonEncode(toJson());
 
   static ProtocolMessage fromEncodedJson(String raw) {
-    final decoded = jsonDecode(raw);
+    final Object? decoded = jsonDecode(raw);
     if (decoded is! Map<String, dynamic>) {
       throw const FormatException('Protocol payload must decode to an object.');
     }
@@ -122,16 +130,33 @@ class ProtocolMessage {
       throw const FormatException('Unsupported protocol version.');
     }
 
-    if ((json['type'] as String).trim().isEmpty) {
-      throw const FormatException('Protocol type cannot be empty.');
+    final type = json['type'];
+    if (type is! String || type.trim().isEmpty) {
+      throw const FormatException('Protocol type must be a non-empty string.');
     }
 
-    if ((json['message_id'] as String).trim().isEmpty) {
-      throw const FormatException('Message ID cannot be empty.');
+    final id = json['message_id'];
+    if (id is! String || id.trim().isEmpty) {
+      throw const FormatException('Message ID must be a non-empty string.');
     }
 
-    if ((json['payload'] as Map).isEmpty) {
-      throw const FormatException('Payload cannot be empty.');
+    for (final key in ['source_id', 'destination_id']) {
+      final value = json[key];
+      if (value is! String || value.trim().isEmpty) {
+        throw FormatException('"$key" must be a non-empty string.');
+      }
+    }
+
+    for (final key in ['sequence_number', 'hop_limit']) {
+      final value = json[key];
+      if (value is! int || value < 0) {
+        throw FormatException('"$key" must be a non-negative integer.');
+      }
+    }
+
+    final payload = json['payload'];
+    if (payload is! Map || payload.isEmpty) {
+      throw const FormatException('Payload must be a non-empty object.');
     }
   }
 }

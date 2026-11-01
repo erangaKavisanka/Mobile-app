@@ -34,3 +34,12 @@ The firmware should:
 - Gateway and cloud synchronization validation with the actual network path
 
 This app currently exposes mock behavior and safe placeholders for these features without claiming they have been verified on real hardware.
+
+## Adding the real USB transport
+
+1. Implement `DeviceTransport` (`lib/features/devices/domain/device_transport.dart`) with a USB serial plugin: open the port in `connect()`, frame each `ProtocolMessage.toEncodedJson()` as one line, and parse inbound lines with `ProtocolMessage.fromEncodedJson` (drop and log lines that throw `FormatException`).
+2. Set `isSimulated` to `false`. The UI then hides simulation badges and controls automatically.
+3. Override `deviceTransportProvider` in `lib/app/providers.dart`.
+4. Add the USB device filter and permission flow to the Android manifest (the optional `android.hardware.usb.host` feature is already declared).
+
+`MessagingService`, `SosService`, `GatewayCoordinator` and all screens depend only on the interface. `SimulatedDeviceTransport` documents the expected packet sequence: HELLO + STATUS on connect, ACK(`gateway`) then ACK(`delivered`) or ERROR for a TEXT, ACK(`gateway`) then ACK(`propagated`) for an SOS.

@@ -2,53 +2,34 @@
 
 ## Overview
 
-EcoLink is the mobile application layer in a hybrid off-grid safety system. It does not implement RF forwarding, gateway routing, or cloud telemetry directly. Instead, it focuses on collecting user actions, storing data locally, managing messaging flows, and exposing clean interfaces for external device and cloud integrations.
+EcoLink is the mobile layer of a hybrid off-grid safety system. It stores user actions locally, runs messaging and SOS logic, and talks to a gateway through an abstract `DeviceTransport`. RF forwarding, gateway firmware and cloud services are outside the app; today they are simulated.
 
-## Main layers
+## Layers
 
-### 1. Presentation layer
+1. **Presentation** (`features/*/presentation`, `shared/widgets`, `app/`): Flutter widgets and Riverpod providers. No SQL and no business rules.
+2. **Domain** (`features/*/domain`): plain models (`Message`, `SosEvent`, `Node`, `SyncItem`, `AppPreferences`) and the interfaces the rest of the app depends on (`MessageRepository`, `SosRepository`, `NodeRepository`, `SyncRepository`, `LocationRepository`, `DeviceTransport`, `CloudGateway`, `LocationSource`).
+3. **Data** (`data/`): Drift database, repository implementations, and services that orchestrate repositories + transport (`MessagingService`, `SosService`, `SyncService`, `GatewayCoordinator`).
+4. **Protocol** (`core/protocol`): `ProtocolMessage` (JSON v1), `ProtocolFactory` (builds packets, typed payload readers). Serialization is independent of UI and transport.
 
-- Dashboard screen for node health and safety status
-- Messaging screen for conversations, queue tracking, and lifecycle states
-- SOS screen for event creation, acknowledgement flow, and resolution
-- Devices screen for node metadata and USB connectivity
-- Settings screen for node configuration and diagnostics
+## State management and navigation
 
-### 2. State and domain layer
+Riverpod providers in `app/providers.dart` expose repositories, services and Drift-backed `StreamProvider`s, so screens update reactively. GoRouter uses a `StatefulShellRoute` with five branches (Home, Messages, SOS, Map, Devices) plus root routes for Settings, Profile and Sync.
 
-- Local app state manages conversations, devices, and SOS events
-- Message lifecycle states represent queued, sent, received, and failed states without claiming delivery confirmation
-- Domain models separate the app’s data concerns from transport and persistence concerns
+## Lifecycles
 
-### 3. Persistence layer
+- **Message:** `local → queued → sentToGateway → delivered` or `failed` (retry returns it to `queued`). Only an ACK (`stage: delivered`) produces `delivered`. Incoming messages are stored as `delivered` (they arrived) and never trigger an ACK from the app.
+- **SOS:** `triggered → sentToGateway → acknowledged → propagated → resolved | cancelled`. A gateway ERROR before acknowledgement moves it to `failed` (still active); it is re-sent by the Retry button or automatically on reconnect. The repository ignores backwards transitions, so late or duplicate ACKs are harmless; closed events never change. Events received from other nodes are stored as `propagated`.
+- **Sync item:** `pending → inProgress → synced | failed`; failures keep `retryCount` and `lastError`. Automatic retries use exponential backoff (30 s doubling, capped at 1 h); "Sync now" bypasses it. Items of one entity upload in order (an update waits for its create). A row re-queued during an upload is not marked synced with the stale snapshot. Interrupted `inProgress` rows are reset on startup. `CloudGateway.push` must be idempotent per `SyncItem.idempotencyKey`.
 
-- SharedPreferences is used for local persistence of messages, SOS history, and local configuration
-- This supports offline-first workflows and ensures the app remains useful without internet access
+## Offline-first guarantees
 
-### 4. Protocol and transport boundary
-
-- The JSON-based protocol models define message schema and compatibility
-- USB transport and serial framing are abstracted away from app logic
-- A mock transport layer simulates device messages for development and validation
-
-### 5. Integration boundary
-
-- Cloud synchronization is represented by status models and placeholder interfaces
-- Actual gateway, MQTT, AWS IoT, and database components remain outside the phone application scope
-
-## Data flow
-
-1. User creates or receives a message.
-2. The message is stored locally and marked with an explicit lifecycle state.
-3. If the mock or hardware transport is available, the message can be sent through the serial boundary.
-4. Acks are treated as the only valid proof of delivery, and a message cannot be marked as delivered without evidence.
-5. Synchronization metadata is updated only when the gateway/cloud contract confirms the event.
+- Every user action is persisted before any transmission is attempted.
+- A message/SOS and its sync-queue row are written in one transaction.
+- On startup `GatewayCoordinator.start()` re-queues messages left in `local` and the next connection flushes queued messages and unsent SOS events.
+- Duplicate packets (same message id / SOS id) are ignored by primary-key constraints.
 
 ## Boundaries
 
-- Mobile application: EcoLink UI and local logic
-- RF network: ESP32 and LoRa mesh nodes
-- Gateway: internet-connected bridge that synchronizes buffered messages
-- Cloud: MQTT/AWS and storage/monitoring services
-
-EcoLink intentionally avoids claiming responsibilities outside the phone app boundary.
+- Mobile application: this repository.
+- RF network and gateway: ESP32-C3 + LoRa RA-02 firmware (not integrated).
+- Cloud: AWS IoT Core, MySQL, Grafana (not integrated).

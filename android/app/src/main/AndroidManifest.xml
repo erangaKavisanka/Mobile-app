@@ -1,4 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- GPS for SOS and location sharing. Requested at runtime. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Map tiles only; all messaging and SOS work without Internet. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Future ESP32-C3 gateway over USB-OTG. Optional so the app still installs
+         on phones without USB host support. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false"/>
     <application
         android:label="EcoLink"
         android:name="${applicationName}"
